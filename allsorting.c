@@ -22,11 +22,16 @@ int binarySearch(char **arr, char *key, int low, int high) {
 }
 
 // Insertion Sort
+
 void insertionSort(char **arr, int n) {
     for (int i = 1; i < n; i++) {
         char *key = arr[i];
         int loc = binarySearch(arr, key, 0, i - 1);
-        memmove(&arr[loc + 1], &arr[loc], (i - loc) * sizeof(char *));
+
+        for (int j = i; j > loc; j--) {
+            arr[j] = arr[j - 1];
+        }
+        // memmove(&arr[loc + 1], &arr[loc], (i - loc) * sizeof(char *));
         arr[loc] = key;
     }
 }
@@ -58,7 +63,7 @@ void quickSort(char **arr, int low, int high) {
     }
 }
 
-void _merge(char **arr, int left, int mid, int right) {
+void merge(char **arr, int left, int mid, int right) {
     int len1 = mid - left + 1;
     int len2 = right - mid;
     char **leftArr = malloc(len1 * sizeof(char *));
@@ -77,6 +82,32 @@ void _merge(char **arr, int left, int mid, int right) {
     free(leftArr);
     free(rightArr);
 }
+void _merge(char **arr, int left, int mid, int right) {
+    int len1 = mid - left + 1;
+    int len2 = right - mid;
+    char **leftArr = malloc(len1 * sizeof(char *));
+    char **rightArr = malloc(len2 * sizeof(char *));
+
+    // ใช้ OpenMP Task สำหรับการคัดลอกข้อมูล
+    #pragma omp task
+    for (int i = 0; i < len1; i++) leftArr[i] = arr[left + i];
+
+    #pragma omp task
+    for (int i = 0; i < len2; i++) rightArr[i] = arr[mid + 1 + i];
+
+    #pragma omp taskwait // รอให้การคัดลอกข้อมูลเสร็จก่อน
+
+    int i = 0, j = 0, k = left;
+    while (i < len1 && j < len2){
+        arr[k++] = (strcmp(leftArr[i], rightArr[j]) <= 0) ? leftArr[i++] : rightArr[j++];
+    }
+    
+    while (i < len1) arr[k++] = leftArr[i++];
+    while (j < len2) arr[k++] = rightArr[j++];
+    
+    free(leftArr);
+    free(rightArr);
+}
 
 // Merge Sort
 void mergeSort(char **arr, int left, int right) {
@@ -84,27 +115,39 @@ void mergeSort(char **arr, int left, int right) {
         int mid = left + (right - left) / 2;
         mergeSort(arr, left, mid);
         mergeSort(arr, mid + 1, right);
-        _merge(arr, left, mid, right);
+        merge(arr, left, mid, right);
     }
 }
 
 void mySort(char **arr, int n) {
-    #pragma omp parallel for
+
     for (int i = 0; i < n; i += RUN) {
         int end = (i + RUN < n) ? (i + RUN) : n;
         insertionSort(arr + i, end - i);
     }
 
     for (int size = RUN; size < n; size *= 2) {
-        #pragma omp parallel for
-        for (int left = 0; left < n; left += 2 * size) {
-            int mid = left + size - 1;
-            int right = (left + 2 * size - 1 < n) ? (left + 2 * size - 1) : (n - 1);
-            if (mid < right) {
-                _merge(arr, left, mid, right);
+        #pragma omp parallel
+        {
+            #pragma omp single
+            {
+                for (int left = 0; left < n; left += 2 * size) {
+                    int mid = left + size - 1;
+                    int right = (left + 2 * size - 1 < n) ? (left + 2 * size - 1) : (n - 1);
+                    if (mid < right) {
+                        #pragma omp task
+                        _merge(arr, left, mid, right);
+                    }
+                }
+                #pragma omp taskwait
             }
         }
     }
+}
+
+// Standard C Library qsort Wrapper
+int compareStrings(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
 }
 
 void mergeSortWrapper(char **arr, int n) {
@@ -116,11 +159,9 @@ void quickSortWrapper(char **arr, int n) {
     quickSort(arr, 0, n - 1);
 }
 
-// Standard C Library qsort Wrapper
-int compareStrings(const void *a, const void *b) {
-    return strcmp(*(const char **)a, *(const char **)b);
+void qsortWrapper(char **arr, int n) {
+    qsort(arr, n, sizeof(char *), compareStrings);
 }
-
 // File Handling Functions
 int readInputFile(const char *filename, char ***data) {
     FILE *file = fopen(filename, "r");
@@ -152,7 +193,6 @@ void benchmarkSorting(char **data, int count, void (*sortFunction)(char **, int)
 
     double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     printf("%s took %.6f seconds.\n", sortName, elapsed_time);
-
     FILE *file = fopen(outputFilename, "w");
     if (!file) {
         perror("Error opening output file");
@@ -169,6 +209,7 @@ void benchmarkSorting(char **data, int count, void (*sortFunction)(char **, int)
     snprintf(command, sizeof(command), "valsort %s", outputFilename);
     printf("Validating %s with valsort...\n", outputFilename);
     system(command);
+    printf("\n");
 }
 
 // Main Function
@@ -188,8 +229,8 @@ int main(int argc, char *argv[]) {
     printf("Benchmarking sorting algorithms...\n");
     benchmarkSorting(data, count, mergeSortWrapper, "Merge Sort", "output/output_merge.txt");
     benchmarkSorting(data, count, quickSortWrapper, "Quick Sort", "output/output_quick.txt");
+    benchmarkSorting(data, count, qsortWrapper, "qsort", "output/output_qsort.txt");
     benchmarkSorting(data, count, mySort, "My Sort", "output/output_mysort.txt");
-    benchmarkSorting(data, count, (void (*)(char **, int))qsort, "qsort", "output/output_qsort.txt");
 
     free(data);
     return 0;
